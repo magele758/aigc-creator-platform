@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.studio-data/
+node_modules/
+.DS_Store
+__pycache__/
+*.py[cod]
+*.log
+runs/
+artifacts/
+.venv/
+playwright-report/
+test-results/
+review/

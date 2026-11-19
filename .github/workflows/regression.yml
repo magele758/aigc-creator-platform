@@ -1,0 +1,37 @@
+name: Regression
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install media tools and app dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          npm ci
+      - name: API, agent tools and storage
+        run: npm test
+      - name: Frame, sound, model graphs and connector contracts
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python -m unittest discover -s workers -p 'test_*.py' -v
+      - name: Install browser for UI regression
+        run: |
+          python -m pip install playwright
+          python -m playwright install chromium --with-deps
+      - name: Browser workflow regression
+        run: python web/tests/browser_smoke.py

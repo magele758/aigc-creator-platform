@@ -1,0 +1,36 @@
+{
+  "openai": {
+    "label": "OpenAI Images",
+    "kinds": ["image", "edit"],
+    "keys": ["STUDIO_OPENAI_IMAGE_KEY"],
+    "model": "gpt-image-2.6-flare",
+    "modelEnv": "STUDIO_OPENAI_IMAGE_MODEL"
+  },
+  "google": {
+    "label": "Google Gemini Image",
+    "kinds": ["image", "edit"],
+    "keys": ["STUDIO_GEMINI_IMAGE_KEY"],
+    "model": "gemini-nano-banana-2.1",
+    "modelEnv": "STUDIO_GEMINI_IMAGE_MODEL"
+  },
+  "aliyun": {
+    "label": "阿里云百炼 · 千问图像",
+    "kinds": ["image", "edit"],
+    "keys": ["STUDIO_DASHSCOPE_IMAGE_KEY", "STUDIO_DASHSCOPE_ORIGIN"],
+    "model": "qwen-image-3.0-pro",
+    "modelEnv": "STUDIO_DASHSCOPE_IMAGE_MODEL"
+  },
+  "jimeng": {
+    "label": "即梦企业视觉 · 文生图",
+    "kinds": ["image"],
+    "keys": ["STUDIO_VOLC_ACCESS_KEY", "STUDIO_VOLC_SECRET_KEY"],
+    "model": "jimeng_t2i_v40"
+  },
+  "selfhost": {
+    "label": "自部署 · Images HTTP",
+    "kinds": ["image", "edit"],
+    "keys": ["STUDIO_IMAGE_BASE_URL", "STUDIO_HTTP_IMAGE_MODEL"],
+    "modelEnv": "STUDIO_HTTP_IMAGE_MODEL",
+    "model": ""
+  }
+}

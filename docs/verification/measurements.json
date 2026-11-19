@@ -1,0 +1,213 @@
+{
+  "date": "2026-11-20",
+  "film": {
+    "chapters": [
+      "桥影入光",
+      "金反射入"
+    ],
+    "frames": 196,
+    "duration": 8.166667,
+    "width": 960,
+    "height": 540,
+    "fps": 24.0,
+    "sha256": "ee4a674b583e86c2d89b792df64baa3f38a7c4289e7e5b60a4ace4f0a7ae79a7"
+  },
+  "directorModel": "grok/grok-4.7-build-fast@500k",
+  "directorToolCalls": [
+    {
+      "tool": "write_project_outline",
+      "seconds": 8.919
+    },
+    {
+      "tool": "write_chapter_scripts",
+      "seconds": 21.533
+    },
+    {
+      "tool": "produce_shots_and_assemble",
+      "seconds": 3.438
+    }
+  ],
+  "filmActiveSeconds": 383.979,
+  "wallFromInitialSubmissionSeconds": 616.757,
+  "assets": [
+    {
+      "kind": "image",
+      "model": "z_image_turbo_bf16.safetensors",
+      "stepCount": 8,
+      "seed": 739264456,
+      "width": 640,
+      "height": 352,
+      "nativeWidth": 640,
+      "nativeHeight": 352,
+      "outputFrames": 1,
+      "mediaSeconds": 0,
+      "inferenceSeconds": 16.01,
+      "workerWallSeconds": 17.165,
+      "gpuQueueSeconds": 1.121,
+      "appQueueSeconds": 0,
+      "wholeCardPeakMiB": 21193,
+      "sha256": "a21aca5d3c5caec5d105de8e51c6cb73e48bfe6d33a3ee5d86e6df2922a2b313"
+    },
+    {
+      "kind": "image",
+      "model": "z_image_turbo_bf16.safetensors",
+      "stepCount": 8,
+      "seed": 357981200,
+      "width": 640,
+      "height": 352,
+      "nativeWidth": 640,
+      "nativeHeight": 352,
+      "outputFrames": 1,
+      "mediaSeconds": 0,
+      "inferenceSeconds": 16.68,
+      "workerWallSeconds": 17.223,
+      "gpuQueueSeconds": 0.627,
+      "appQueueSeconds": 0,
+      "wholeCardPeakMiB": 21143,
+      "sha256": "8da3289b3a69211c4b1a859de8ca5a1e96d337b0069f183d43beffd612f5e2bc"
+    },
+    {
+      "kind": "video",
+      "model": "wan2.2_ti2v_5B_fp16.safetensors",
+      "stepCount": 20,
+      "seed": 342905573,
+      "width": 640,
+      "height": 352,
+      "nativeWidth": 640,
+      "nativeHeight": 352,
+      "outputFrames": 49,
+      "mediaSeconds": 4.083333,
+      "inferenceSeconds": 77.087,
+      "workerWallSeconds": 163.189,
+      "gpuQueueSeconds": 85.242,
+      "appQueueSeconds": 0,
+      "wholeCardPeakMiB": 21737,
+      "sha256": "0d06143baaf23c91523d8c362d07c8536d9c65e51b9e98d9e4911f1b96bfef75"
+    },
+    {
+      "kind": "video",
+      "model": "wan2.2_ti2v_5B_fp16.safetensors",
+      "stepCount": 20,
+      "seed": 548490686,
+      "width": 640,
+      "height": 352,
+      "nativeWidth": 640,
+      "nativeHeight": 352,
+      "outputFrames": 49,
+      "mediaSeconds": 4.083333,
+      "inferenceSeconds": 75.986,
+      "workerWallSeconds": 137.635,
+      "gpuQueueSeconds": 61.564,
+      "appQueueSeconds": 0,
+      "wholeCardPeakMiB": 21702,
+      "sha256": "d44f4f2673d4947dd548a0627d6ffd6ce001246c9c2f4f2536a1b7ff3931a42b"
+    }
+  ],
+  "exportSeconds": 0.705,
+  "independentImage": [
+    {
+      "kind": "image",
+      "model": "z_image_turbo_bf16.safetensors",
+      "stepCount": 8,
+      "seed": 73402,
+      "width": 640,
+      "height": 448,
+      "nativeWidth": 640,
+      "nativeHeight": 448,
+      "outputFrames": 1,
+      "mediaSeconds": 0,
+      "inferenceSeconds": 16.324,
+      "workerWallSeconds": 16.308,
+      "gpuQueueSeconds": 0.824,
+      "appQueueSeconds": 123.868,
+      "wholeCardPeakMiB": 21190,
+      "sha256": "dc1e3c877f134c6c2d18b99801b878eb93aab4496e72c2f5653a248fe613507b"
+    },
+    {
+      "kind": "image",
+      "model": "boogu_image_edit_turbo_int8_convrot.safetensors",
+      "stepCount": 8,
+      "seed": 73403,
+      "width": 640,
+      "height": 448,
+      "nativeWidth": 1216,
+      "nativeHeight": 864,
+      "outputFrames": 1,
+      "mediaSeconds": 0,
+      "inferenceSeconds": 61.819,
+      "workerWallSeconds": 62.926,
+      "gpuQueueSeconds": 1.483,
+      "appQueueSeconds": 0,
+      "wholeCardPeakMiB": 21641,
+      "sha256": "450e0dc153822dd51542a828de6e58420780d3fb3b77cf6fc970e0a142749ccb"
+    }
+  ],
+  "preservation": {
+    "meanBlueGainOnOrangeSubject": 167.34,
+    "backgroundMeanRgbErrorInsideMask": 3.63,
+    "changedInsidePixels": 143367,
+    "changedOutsidePixels": 0,
+    "protectedPixels": 143248
+  },
+  "naturalLanguageRecut": {
+    "operations": [
+      "move_clip",
+      "trim_clip",
+      "export"
+    ],
+    "frames": 170,
+    "duration": 7.083333,
+    "elapsedSeconds": 8.814
+  },
+  "interactive": {
+    "dataset": {
+      "projects": 100,
+      "assetsPerProject": 1000,
+      "totalAssetSummaries": 100000,
+      "activeChapters": 10,
+      "shots": 500,
+      "screenplayCharacters": 50000,
+      "syntheticThumbnailBytes": 92156,
+      "databaseBytes": 13017088
+    },
+    "browser": "158.0.8127.37",
+    "system": "Darwin arm64",
+    "measurement": "Cold browser contexts; already-running local service, synthetic 256x144 imagery and a chapter-sized editable text area; foreground sole test tab. Input latency measures input to second animation frame.",
+    "network": "target",
+    "directorySummaryHttpMs": {
+      "samples": 30,
+      "p50Ms": 0.72,
+      "p95Ms": 0.94,
+      "maxMs": 1.74
+    },
+    "directoryPayloadBytes": 30707,
+    "directoryInteractiveMs": {
+      "samples": 30,
+      "p50Ms": 303.45,
+      "p95Ms": 311.5,
+      "maxMs": 315.8
+    },
+    "mapInteractiveMs": {
+      "samples": 30,
+      "p50Ms": 410.55,
+      "p95Ms": 426.4,
+      "maxMs": 426.4
+    },
+    "mapFrameIntervalsMs": {
+      "samples": 365,
+      "p50Ms": 16.7,
+      "p95Ms": 16.7,
+      "maxMs": 16.8
+    },
+    "mapMaximumLoadedThumbnails": 6,
+    "mapImageRequestsAcrossGestures": 55,
+    "typingToNextPaintMs": {
+      "samples": 500,
+      "p50Ms": 24.3,
+      "p95Ms": 32,
+      "maxMs": 33.7
+    },
+    "typedCharactersVerifiedAfterReload": 500,
+    "pageErrors": []
+  }
+}

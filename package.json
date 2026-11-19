@@ -1,0 +1,16 @@
+{
+  "name": "dieying-studio",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "test": "node --test server/*.test.mjs",
+    "bench:directory": "node server/benchmark-directory.mjs"
+  },
+  "dependencies": {
+    "@mage-ai-lab/agent-loop": "0.1.5"
+  }
+}
