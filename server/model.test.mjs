@@ -94,3 +94,75 @@ test('真实 SDK 只接受已注册工具产生的受校验命令；聊天回复
   textOnly = true;
   await assert.rejects(() => requestCommand(task), /未成功调用/);
 });
+
+test('工作室导演能在同一个 SDK 会话里读取工具回执，再据此决定下一次调用', async (t) => {
+  const { runDirectorSession } = await import('./model.mjs');
+  const observed = [];
+  let finished = false;
+  const server = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const part of req) chunks.push(part);
+    const { messages, stream } = JSON.parse(Buffer.concat(chunks));
+    const hasReceipt = messages.some(
+      (m) => m.role === 'tool' && JSON.stringify(m.content).includes('actual-receipt-42'),
+    );
+    const name = hasReceipt ? 'finish_direction' : 'read_project';
+    const args = hasReceipt ? { id: 'actual-receipt-42' } : {};
+    const fn = { name, arguments: JSON.stringify(args) };
+    const tool = { id: 'call-' + name, type: 'function', function: fn };
+    if (stream) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const choice of [
+        { index: 0, delta: { role: 'assistant', tool_calls: [{ ...tool, index: 0 }] }, finish_reason: null },
+        { index: 0, delta: {}, finish_reason: 'tool_calls' },
+      ])
+        res.write('data: ' + JSON.stringify({ choices: [choice] }) + '\n\n');
+      res.end('data: [DONE]\n\n');
+    } else {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: null, tool_calls: [tool] },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      );
+    }
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  process.env.STUDIO_TEXT_BASE_URL = 'http://127.0.0.1:' + server.address().port + '/v1';
+  process.env.STUDIO_TEXT_MODEL = 'studio-test';
+  const tool = (name, execute) => ({
+    name,
+    execute,
+    description: name,
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
+    approvalMode: 'never',
+    sideEffectLevel: 'workspace',
+  });
+  await runDirectorSession({
+    task: '读取实际对象并回报其 ID',
+    isFinished: () => finished,
+    tools: [
+      tool('read_project', async () => {
+        observed.push('read');
+        return { ok: true, content: 'actual-receipt-42' };
+      }),
+      tool('finish_direction', async (_ctx, a) => {
+        observed.push(a.id);
+        finished = true;
+        return { ok: true, content: '完成' };
+      }),
+    ],
+  });
+  assert.deepEqual(observed, ['read', 'actual-receipt-42']);
+});

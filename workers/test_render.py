@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import subprocess
@@ -6,11 +7,36 @@ import time
 import unittest
 from unittest.mock import patch
 
+import connect
 import render
 from workflows import BOOGU, WAN, Z_IMAGE, boogu_reference_size, motion, still
 
 
 class LocalRenderTests(unittest.TestCase):
+    def test_forward_recovers_live_gpu_service_without_wsl_launch(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch("sys.argv", ["connect.py", "--host", "gpu-test"]))
+            stack.enter_context(patch.object(connect, "healthy", side_effect=[False, True]))
+            stack.enter_context(patch.object(connect, "remote_healthy", return_value=True))
+            start = stack.enter_context(patch.object(connect, "start_service"))
+            stack.enter_context(patch.object(connect.socket, "create_connection", side_effect=ConnectionRefusedError()))
+            ssh = stack.enter_context(patch.object(connect.subprocess, "run"))
+            stack.enter_context(patch("builtins.print"))
+            connect.main()
+            start.assert_not_called()
+            ssh.assert_called_once()
+            self.assertIn("127.0.0.1:18188:127.0.0.1:18188", ssh.call_args.args[0])
+
+    def test_model_service_probe_checks_project_and_port(self):
+        launch = ["main.py", "--user-directory", "/home/test/.local/share/dieying-render/user", "--port", "18188"]
+
+        def stats(argv):
+            return json.dumps({"devices": [{"name": "cuda:0"}], "system": {"argv": argv}})
+
+        self.assertTrue(connect.project_service(stats(launch), 18188))
+        self.assertFalse(connect.project_service(stats(launch), 18189))
+        self.assertFalse(connect.project_service(stats(["main.py", "--port", "18188"]), 18188))
+
     def test_text_image_and_all_reference_slots(self):
         g, model = still("a blue lamp", 640, 448, 8, 5, [])
         self.assertEqual(model, Z_IMAGE)

@@ -18,6 +18,7 @@ import {
   uid,
   now,
   transaction,
+  afterCommit,
 } from './store.mjs';
 
 const S = { type: 'string' };
@@ -36,18 +37,18 @@ export function enqueue(body) {
   if (body.projectId != null) {
     str(body.projectId, 120, '项目标识');
     project(body.projectId);
-  } else must(body.kind === 'agent', '此任务需要一个项目');
+  } else must(['agent', 'command'].includes(body.kind), '此任务需要一个项目');
   if (body.prompt !== undefined) str(body.prompt, 24000, '提示词', true);
   if (body.brief !== undefined) str(body.brief, 18000, '简报', true);
   if (body.name !== undefined) str(body.name, 120, '项目名', true);
   if (body.chapters != null)
     must(Number.isInteger(body.chapters) && body.chapters >= 1 && body.chapters <= 12, '单次可制作 1–12 章');
-  if (body.kind === 'command') must(body.projectId && body.prompt?.trim(), '导演指令需要当前项目与委托内容');
+  if (body.kind === 'command') must(body.prompt?.trim(), '请填写导演委托内容');
   if (body.kind === 'agent' && !body.projectId)
     must(body.brief?.trim() || body.prompt?.trim(), '请填写创作委托');
   if (['image', 'edit', 'video'].includes(body.kind)) chooseInputs(project(body.projectId), body);
   const { j, created } = addJob(body);
-  if (created) setImmediate(() => execute(j.id));
+  if (created) afterCommit(() => setImmediate(() => execute(j.id)));
   return publicJob(j);
 }
 export function recoverQueue() {
@@ -66,7 +67,7 @@ export function retry(id) {
   j.status = 'queued';
   delete j.error;
   saveJob(j);
-  setImmediate(() => execute(id));
+  afterCommit(() => setImmediate(() => execute(id)));
   return publicJob(j);
 }
 function setup(j) {
@@ -361,8 +362,14 @@ async function execute(id) {
     let a;
     if (j.kind === 'agent') j.result = await produce(j, ctl);
     else if (j.kind === 'command') {
-      const { applyDirectorCommand } = await import('./command-actions.mjs');
-      j.result = await applyDirectorCommand(j, ctl);
+      if (j.checkpoints.workspace_command || j.checkpoints.commandRevision !== undefined) {
+        // Resume a pre-upgrade command with its immutable plan and edit receipts.
+        const { applyDirectorCommand } = await import('./command-actions.mjs');
+        j.result = await applyDirectorCommand(j, ctl);
+      } else {
+        const { directWorkspace } = await import('./director.mjs');
+        j.result = await directWorkspace(j, ctl);
+      }
     } else if (j.kind === 'outline') await outlineStage(j, ctl);
     else if (j.kind === 'script') await scriptStage(j, ctl);
     else if (j.kind === 'export') a = await exportSequence(j, ctl.emit);

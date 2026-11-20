@@ -8,6 +8,7 @@ The intentionally unavailable worker exercises durable submission and error hand
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
@@ -72,6 +73,102 @@ def call(base, path, payload=None, method=None):
     )
     with urlopen(req, timeout=10) as r:
         return json.load(r)
+
+
+def test_director_receipts(page, base, pid):
+    # Drive the real form & app router; control job timing so fast completion,
+    # a disconnected acknowledgement, reload and foreign/headless jobs are repeatable.
+    pending = {}
+    submissions = []
+    current = "/api/projects/" + pid + "/media/"
+    asset = call(base, "/api/projects/" + pid)["project"]["assets"][0]
+
+    def jobs_fixture(route):
+        req = route.request
+        if req.method == "POST":
+            body = req.post_data_json
+            submissions.append(body)
+            jid = "browser-command-" + str(len(submissions))
+            j = {
+                "id": jid, "kind": "command", "requestId": body["idempotencyKey"],
+                "projectId": pid, "status": "running", "stage": "running",
+            }
+            pending[jid] = j
+            if len(submissions) == 1:
+                route.abort("connectionreset")
+            else:
+                j.update(status="succeeded", stage="complete", result={
+                    "view": {"theme": "field", "page": "jobs", "job": jid},
+                    "assetUrl": current + asset["id"],
+                })
+                route.fulfill(status=202, json={"job": j})
+            return
+        if "summary=1" in req.url:
+            return route.fulfill(json={"jobs": list(reversed(pending.values()))})
+        jid = req.url.rsplit("/", 1)[-1]
+        if jid in pending:
+            return route.fulfill(json={"job": pending[jid]})
+        return route.continue_()
+
+    pending["foreign"] = {
+        "id": "foreign", "requestId": "from-another-client", "kind": "command",
+        "status": "succeeded", "stage": "complete", "projectId": pid,
+        "result": {"view": {"theme": "classic", "page": "cut", "projectId": pid}},
+    }
+    page.route(re.compile(r"/api/jobs(?:[/?]|$)"), jobs_fixture)
+    page.goto(base + "/#/home")
+    page.locator("#top [data-act=agent]").click()
+    mode = page.locator("#agent-mode")
+    assert mode.input_value() == "command" and page.locator("#agent-project").input_value() == ""
+    assert not page.locator("#agent-count").is_visible()
+    mode.select_option("agent")
+    assert page.locator("#agent-count").is_visible() and page.locator("#agent-name").is_visible()
+    mode.select_option("command")
+    page.locator("#agent-attachments summary").click()
+    image = {"name": "product.png", "mimeType": "image/png", "buffer": png()}
+    mask = {**image, "name": "area.png"}
+    page.locator("#agent-masks").set_input_files(mask)
+    page.locator("#agent-brief").fill("把附件导入项目，然后切换为红黑主题并打开素材页")
+    page.locator("#agent-files").set_input_files([{**image, "name": f"{i}.png"} for i in range(6)])
+    page.locator("#director button[type=submit], #director button.primary").click()
+    assert "最多可附上 6 个文件" in page.locator(".dialog-error").inner_text()
+    assert not submissions
+    page.locator("#agent-files").set_input_files(image)
+    with page.expect_event("requestfailed", lambda r: r.url.endswith("/api/jobs")):
+        page.locator("#director button.primary").click()
+    body = submissions[0]
+    assert body["kind"] == "command" and "projectId" not in body
+    assert [(f["title"], f.get("role")) for f in body["commandFiles"]] == [
+        ("product.png", None), ("area.png", "mask")
+    ]
+    assert all(f["dataUrl"].startswith("data:image/png;base64,") for f in body["commandFiles"])
+    page.locator("dialog [data-dismiss]").click()
+    page.reload()
+    page.locator(".featured").wait_for()
+    pending["browser-command-1"].update(status="succeeded", stage="complete", result={
+        "view": {"theme": "cinema", "page": "assets", "projectId": pid}
+    })
+    page.wait_for_url("**/#/p/" + pid + "/assets")
+    page.get_by_role("heading", name="资源与共享", exact=True).wait_for()
+    assert page.locator("html").get_attribute("data-theme") == "cinema"
+    page.locator('#top [data-act="agent"]').click()
+    assert page.locator("#agent-project").input_value() == pid
+    page.locator("#agent-brief").fill("切换荧光主题，打开下载结果")
+    page.locator("#director button.primary").click()
+    page.wait_for_function("document.documentElement.dataset.theme === 'field'")
+    page.get_by_role("link", name="下载素材").wait_for()
+    assert page.get_by_role("link", name="下载素材").get_attribute("href") == current + asset["id"] + "?download=1"
+
+    # A personal appearance choice after receipt consumption survives the old result.
+    page.locator("#theme-button").click()
+    page.locator('[data-theme-choice="cinema"]').click()
+    page.goto(base + "/#/home")
+    page.reload()
+    page.locator(".featured").wait_for()
+    assert page.locator("html").get_attribute("data-theme") == "cinema"
+    assert page.url.endswith("/#/home")
+    assert page.evaluate("Object.keys(JSON.parse(sessionStorage.getItem('cine.director.receipts'))).length") == 0
+    print("PASS workspace director, media attachments, explicit film mode, lost/late acknowledgement, tab-owned view receipts and download", flush=True)
 
 
 def test_ui(web, base, tmp):
@@ -213,6 +310,9 @@ def test_ui(web, base, tmp):
     assert page.locator('#rail [data-nav="image"]').is_visible()
     assert not errors, errors
     print("PASS manual stages, Map edit, director scope and mobile navigation", flush=True)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    test_director_receipts(page, base, pid)
+    assert not errors, errors
     browser.close()
 
 

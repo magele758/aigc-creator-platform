@@ -23,6 +23,7 @@ import {
 } from './store.mjs';
 import { enqueue, retry, recoverQueue } from './pipeline.mjs';
 import { localPath, upload } from './media.mjs';
+import { prepareDirectorRequest } from './director-files.mjs';
 import { modelHealth } from './model.mjs';
 import { listProviders } from '../providers/catalog.mjs';
 
@@ -183,7 +184,7 @@ async function route(req, res) {
     }
   }
   if (type === 'jobs') {
-    if (!id && method === 'POST') return json(res, 202, { job: enqueue(await body(req)) });
+    if (!id && method === 'POST') return json(res, 202, { job: enqueue(await prepareDirectorRequest(await body(req))) });
     if (!id && method === 'GET') {
       const pid = url.searchParams.get('projectId');
       if (url.searchParams.get('summary') === '1') {

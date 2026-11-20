@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -96,7 +96,7 @@ export function localPath(a) {
   );
   return join(objects, a.file);
 }
-export async function upload(pId, { title, dataUrl, role }) {
+export async function upload(pId, { title, dataUrl, role }, receipt = {}) {
   const p = project(pId);
   must(typeof dataUrl === 'string', '请上传图片文件');
   const match = /^data:(image\/(?:png|jpeg|webp)|video\/(?:mp4|webm));base64,([A-Za-z0-9+/=]+)$/.exec(
@@ -106,6 +106,15 @@ export async function upload(pId, { title, dataUrl, role }) {
   if (role !== undefined) must(role === 'mask' && match[1] === 'image/png', '遮罩请使用 PNG 格式。');
   const bytes = Buffer.from(match[2], 'base64');
   must(bytes.length > 0 && bytes.length <= 25 * 1024 * 1024, '素材上限为 25 MiB');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  function previous(current) {
+    if (!receipt.jobId || !receipt.slot) return null;
+    const saved = current.assets.find((a) => a.jobId === receipt.jobId && a.slot === receipt.slot);
+    must(!saved || (saved.sha256 === sha256 && saved.role === role), '同一上传步骤已对应不同素材', 409);
+    return saved;
+  }
+  const cached = previous(p);
+  if (cached) return cached;
   const ext = match[1].split('/')[1].replace('jpeg', 'jpg'),
     id = uid();
   await mkdir(objects, { recursive: true });
@@ -115,6 +124,8 @@ export async function upload(pId, { title, dataUrl, role }) {
     file,
     title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 180) : '上传素材',
     origin: 'upload',
+    ...(receipt.jobId && receipt.slot ? { jobId: receipt.jobId, slot: receipt.slot } : {}),
+    ...(receipt.sourceAssetId ? { inputRefs: { main: receipt.sourceAssetId } } : {}),
     ...(role ? { role } : {}),
     createdAt: now(),
     kind: match[1].startsWith('image/') ? 'image' : 'video',
@@ -161,7 +172,12 @@ export async function upload(pId, { title, dataUrl, role }) {
       throw failure('上传文件的首帧无法解码。');
     }
     Object.assign(a, m);
-    a.sha256 = createHash('sha256').update(bytes).digest('hex');
+    a.sha256 = sha256;
+    const concurrent = previous(project(pId));
+    if (concurrent) {
+      await rm(localPath(a), { force: true });
+      return concurrent;
+    }
     mutateProject(p.id, (x) => x.assets.push(a));
     return a;
   } catch (e) {
@@ -178,10 +194,39 @@ export function chooseInputs(p, req) {
   for (const a of [main, mask, ...refs].filter(Boolean))
     must(a.kind === 'image', '主图、参考图及遮罩必须是图片');
   must(!mask || main, '遮罩须与主图一起使用');
+  if (mask?.role === 'mask' && mask.inputRefs?.main)
+    must(mask.inputRefs.main === main?.id, '此遮罩属于另一张主图');
   must(!mask || req.kind === 'edit' || (req.kind === 'image' && main), '此工序不支持局部遮罩');
   must(req.kind !== 'edit' || main, '局部修图需要主图');
   must(req.prompt?.trim() || main || refs.length, '至少提供文字、主图或参考图');
   return { main, mask, refs };
+}
+export async function createSelection(j, sourceId, geometry, slot, title) {
+  const p = project(j.projectId),
+    source = getAsset(p, sourceId),
+    existing = p.assets.find((a) => a.jobId === j.id && a.slot === slot);
+  must(
+    source.kind === 'image' && source.role !== 'mask' && source.width && source.height,
+    '绘制选区需要有效的原图',
+  );
+  if (existing) return existing;
+  const folder = await jobFolder(j.id);
+  const spec = join(folder, slot + '.selection.json');
+  const file = join(folder, slot + '.mask.png');
+  await writeFile(spec, JSON.stringify({ width: source.width, height: source.height, ...geometry }), {
+    mode: 0o600,
+  });
+  await child(process.env.STUDIO_PYTHON || 'python3', ['media/mask.py', spec, file], 30000);
+  const bytes = await readFile(file);
+  return upload(
+    p.id,
+    {
+      title: title || '作用选区 · ' + source.title,
+      dataUrl: 'data:image/png;base64,' + bytes.toString('base64'),
+      role: 'mask',
+    },
+    { jobId: j.id, slot, sourceAssetId: source.id },
+  );
 }
 async function jobFolder(id) {
   const folder = join(dataDir, 'jobs', id);
@@ -195,6 +240,8 @@ const safeNum = (v, min, max, key) => {
 export async function generateMedia(j, req, slot, emit) {
   let p = project(j.projectId);
   const cached = p.assets.find((a) => a.jobId === j.id && a.slot === slot);
+  if (cached?.adoptionConflict)
+    throw failure('镜头已修改。本次候选 ' + cached.id + ' 已独立保留在项目素材库。', 409);
   if (cached) return cached;
   const { main, mask, refs } = chooseInputs(p, req),
     shots = p.chapters.flatMap((c) => c.shots);
@@ -296,7 +343,14 @@ export async function generateMedia(j, req, slot, emit) {
         for (const input of [main, mask, ...refs].filter(Boolean)) getAsset(latest, input.id);
         if (shot) {
           const live = latest.chapters.flatMap((c) => c.shots).find((s) => s.id === shot.id);
-          if (live && live.prompt === shot.prompt && live[a.kind] === shot[a.kind]) live[a.kind] = a.id;
+          const promptKey = a.kind === 'image' ? 'imagePrompt' : 'videoPrompt';
+          if (
+            live &&
+            live.prompt === shot.prompt &&
+            live[promptKey] === shot[promptKey] &&
+            live[a.kind] === shot[a.kind]
+          )
+            live[a.kind] = a.id;
           else a.adoptionConflict = true;
         }
         latest.assets.push(a);
@@ -305,14 +359,14 @@ export async function generateMedia(j, req, slot, emit) {
       await rm(path, { force: true });
       throw e;
     }
-    if (a.adoptionConflict) throw failure('镜头已修改。本次生成的候选已独立保留在项目素材库。', 409);
+    if (a.adoptionConflict) throw failure('镜头已修改。本次候选 ' + a.id + ' 已独立保留在项目素材库。', 409);
     return a;
   };
   return cloud ? run() : useGpu(run);
 }
-export async function exportSequence(j, emit) {
+export async function exportSequence(j, emit, slot) {
   const p = project(j.projectId),
-    existing = p.assets.find((a) => a.jobId === j.id && a.role === 'delivery');
+    existing = p.assets.find((a) => a.jobId === j.id && a.role === 'delivery' && a.slot === slot);
   if (existing) return existing;
   must(p.sequence.length, '时间线还没有视频');
   const frozen = structuredClone(p.sequence);
@@ -328,16 +382,18 @@ export async function exportSequence(j, emit) {
     };
   });
   const folder = await jobFolder(j.id),
-    requestFile = join(folder, 'export.request.json'),
+    requestFile = join(folder, (slot || 'export') + '.request.json'),
     id = uid(),
     file = id + '.mp4',
     out = join(objects, file);
   const width = j.request.exportWidth || 960,
     height = j.request.exportHeight || 540;
+  const fps = j.request.exportFps ?? 24;
   safeNum(width, 32, 4096, '导出宽度');
   safeNum(height, 32, 4096, '导出高度');
   await mkdir(objects, { recursive: true });
-  await writeFile(requestFile, JSON.stringify({ clips, width, height, fps: 24 }), { mode: 0o600 });
+  safeNum(fps, 12, 60, '导出帧率');
+  await writeFile(requestFile, JSON.stringify({ clips, width, height, fps }), { mode: 0o600 });
   emit('export.running', { clips: clips.length });
   const start = performance.now();
   await child(
@@ -351,6 +407,7 @@ export async function exportSequence(j, emit) {
     file,
     kind: 'video',
     role: 'delivery',
+    ...(slot ? { slot } : {}),
     title: p.name + ' · 成片',
     version: 1,
     origin: 'editor',

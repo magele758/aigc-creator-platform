@@ -41,13 +41,63 @@ tmux new-session -d -s "$session_name" "$launch$options >$logfile 2>&1"
 """
 
 
-def healthy(url):
+def project_service(raw, port):
+    try:
+        data = json.loads(raw)
+        argv = data["system"]["argv"]
+        config = dict(zip(argv, argv[1:]))
+        return bool(data["devices"]) and (
+            config.get("--port") == str(port)
+            and config.get("--user-directory", "").endswith("/.local/share/dieying-render/user")
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+
+
+def healthy(url, port):
     try:
         with urllib.request.urlopen(url + "/system_stats", timeout=2) as r:
-            data = json.load(r)
-        return isinstance(data.get("system"), dict) and bool(data.get("devices"))
+            return project_service(r.read(), port)
     except (OSError, ValueError):
         return False
+
+
+def remote_healthy(ssh, runtime, url, port):
+    # The mirrored guest's HTTP service can remain available through Windows
+    # even when WSL's separate command channel has stopped responding.
+    curl = "curl.exe" if runtime == "wsl" else "curl"
+    try:
+        response = subprocess.run(
+            [*ssh, curl, "--noproxy", "127.0.0.1", "-fsS", "--max-time", "3", url + "/system_stats"],
+            capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return response.returncode == 0 and project_service(response.stdout, port)
+
+
+def start_service(ssh, a):
+    reserve = a.reserve_gib
+    if reserve is None:
+        raw = subprocess.check_output(
+            ssh + ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+            text=True,
+        )
+        used, total = map(float, raw.splitlines()[0].split(","))
+        reserve = min((total - 1536) / 1024, max(1.5, round(used / 1024 + 0.8, 1)))
+    if not 0 < reserve < 128:
+        raise SystemExit("Invalid VRAM reserve")
+    vals = {
+        "remote_port": a.port,
+        "reserve_gib": reserve,
+        "comfy_dir": os.environ.get("DIEYING_REMOTE_COMFY_DIR", ""),
+        "python_bin": os.environ.get("DIEYING_REMOTE_PYTHON", ""),
+    }
+    script = "\n".join(k + "=" + shlex.quote(str(v)) for k, v in vals.items()) + "\n" + REMOTE_SCRIPT
+    subprocess.run(
+        ssh + (["wsl", "-e"] if a.runtime == "wsl" else []) + ["bash", "-s"],
+        input=script, text=True, check=True,
+    )
 
 
 def main():
@@ -68,32 +118,16 @@ def main():
     a = p.parse_args()
     if not 1024 <= a.port <= 65535 or not a.host or a.host.startswith("-"):
         p.error("Provide a valid SSH alias and private service port")
+    if a.reserve_gib is not None and not 0 < a.reserve_gib < 128:
+        p.error("Invalid VRAM reserve")
     url = f"http://127.0.0.1:{a.port}"
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "-T", a.host]
-    reserve = a.reserve_gib
-    if reserve is None:
-        raw = subprocess.check_output(
-            ssh
-            + ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
-            text=True,
-        )
-        used, total = map(float, raw.splitlines()[0].split(","))
-        reserve = min((total - 1536) / 1024, max(1.5, round(used / 1024 + 0.8, 1)))
-    if not 0 < reserve < 128:
-        p.error("Invalid VRAM reserve")
-    vals = {
-        "remote_port": a.port,
-        "reserve_gib": reserve,
-        "comfy_dir": os.environ.get("DIEYING_REMOTE_COMFY_DIR", ""),
-        "python_bin": os.environ.get("DIEYING_REMOTE_PYTHON", ""),
-    }
-    script = "\n".join(k + "=" + shlex.quote(str(v)) for k, v in vals.items()) + "\n" + REMOTE_SCRIPT
-    subprocess.run(
-        ssh + (["wsl", "-e"] if a.runtime == "wsl" else []) + ["bash", "-s"],
-        input=script,
-        text=True,
-        check=True,
-    )
+    result = {"endpoint": url, "available": True, "service": f"dieying-render-{a.port}"}
+    if healthy(url, a.port):
+        print(json.dumps(result))
+        return
+    if not remote_healthy(ssh, a.runtime, url, a.port):
+        start_service(ssh, a)
     try:
         with socket.create_connection(("127.0.0.1", a.port), timeout=1):
             pass
@@ -115,13 +149,13 @@ def main():
             check=True,
         )
     deadline = time.monotonic() + 60
-    while not healthy(url):
+    while not healthy(url, a.port):
         if time.monotonic() > deadline:
             raise SystemExit(
                 "Service not ready. Inspect ~/.local/share/dieying-render/service.log on the GPU host."
             )
         time.sleep(1)
-    print(json.dumps({"endpoint": url, "available": True, "service": f"dieying-render-{a.port}"}))
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

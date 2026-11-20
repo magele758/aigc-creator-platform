@@ -61,16 +61,32 @@ export function list(x, max, field) {
   must(Array.isArray(x) && x.length <= max, field + ' 数量不正确');
   return x;
 }
+const commitCallbacks = [];
+export function afterCommit(fn) {
+  if (commitCallbacks.length) commitCallbacks.at(-1).push(fn);
+  else fn();
+}
 export function transaction(fn) {
-  db.exec('BEGIN IMMEDIATE');
+  const depth = commitCallbacks.length;
+  const savepoint = depth ? `studio_nested_${depth}` : null;
+  db.exec(savepoint ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+  const callbacks = [];
+  commitCallbacks.push(callbacks);
+  let value;
   try {
-    const v = fn();
-    db.exec('COMMIT');
-    return v;
+    value = fn();
+    db.exec(savepoint ? `RELEASE ${savepoint}` : 'COMMIT');
   } catch (e) {
-    db.exec('ROLLBACK');
+    if (savepoint) {
+      db.exec(`ROLLBACK TO ${savepoint}`);
+      db.exec(`RELEASE ${savepoint}`);
+    } else db.exec('ROLLBACK');
     throw e;
+  } finally {
+    commitCallbacks.pop();
   }
+  for (const callback of callbacks) afterCommit(callback);
+  return value;
 }
 const rowJson = (row) => (row ? JSON.parse(row.body) : null);
 export function project(id) {
@@ -350,7 +366,7 @@ export function jobSummaries(projectId, limit = 100) {
     'error',
   ];
   const fields = columns.map((k) => `json_extract(body,'$.${k}') AS ${k}`).join(',');
-  const query = `SELECT id,${fields},json_extract(body,'$.metrics.elapsedSeconds') AS elapsedSeconds,
+  const query = `SELECT id,${fields},json_extract(body,'$.metrics.elapsedSeconds') AS elapsedSeconds,request_key AS requestId,
     json_array_length(body,'$.events') AS eventCount, json_extract(body,'$.result') AS resultJson FROM jobs ${projectId ? "WHERE json_extract(body,'$.projectId')=?" : ''} ORDER BY rowid DESC LIMIT ?`;
   return db
     .prepare(query)
@@ -368,7 +384,7 @@ export function saveJob(j) {
 }
 export function publicJob(j) {
   const { request, checkpoints, checkpointInputs, ...rest } = j;
-  return rest;
+  return { ...rest, requestId: request.idempotencyKey || null };
 }
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);

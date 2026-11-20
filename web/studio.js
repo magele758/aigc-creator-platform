@@ -40,6 +40,24 @@ const names = Object.fromEntries([
   ['jobs', '制作任务'],
 ]);
 const stageNames = new Set(Object.keys(names));
+const receiptKey = 'cine.director.receipts';
+let receipts = {};
+try {
+  receipts = JSON.parse(sessionStorage.getItem(receiptKey)) || {};
+} catch {}
+const submitting = new Set();
+function storeReceipts() {
+  try {
+    sessionStorage.setItem(receiptKey, JSON.stringify(receipts));
+  } catch {}
+}
+function setTheme(theme) {
+  if (!Object.hasOwn(themes, theme)) return;
+  document.documentElement.dataset.theme = theme;
+  try {
+    localStorage.setItem('cine.appearance', theme);
+  } catch {}
+}
 let navigation = 0,
   busyPoll = false,
   cleanup;
@@ -65,6 +83,48 @@ function go(page, projectId, params = {}) {
     return;
   }
   location.hash = dest;
+}
+// Only the submitting tab may act on a director's view receipt. Register the
+// request before the POST so a committed job still works if its response is lost.
+function applyDirectorViews(list) {
+  let navigated = false;
+  for (const [requestId, receipt] of Object.entries(receipts)) {
+    if (submitting.has(requestId)) continue;
+    const job = list.find((item) => item.id === receipt.jobId || item.requestId === requestId);
+    if (!job) continue;
+    if (!receipt.jobId) {
+      receipt.jobId = job.id;
+      storeReceipts();
+      try {
+        sessionStorage.removeItem(receipt.pending);
+      } catch {}
+    }
+    if (!['succeeded', 'failed', 'cancelled', 'interrupted'].includes(job.status)) continue;
+    const view = job.status === 'succeeded' && job.result?.view;
+    const page = view?.page;
+    const global = page === 'home' || page === 'jobs';
+    const projectId = global ? null : view?.projectId || job.projectId;
+    const openPage = stageNames.has(page) && (global || projectId);
+    const activeDialog = q('#dialog[open]');
+    const ownForm = activeDialog?.querySelector('#director')?.dataset.requestId === requestId;
+    if (openPage && (q('#content').dataset.dirty === 'true' || (activeDialog && !ownForm))) continue;
+    delete receipts[requestId];
+    storeReceipts();
+    if (ownForm) activeDialog.close();
+    if (view?.theme) setTheme(view.theme);
+    if (openPage) {
+      const params = {};
+      for (const key of ['chapter', 'shot', 'job', 'result']) {
+        if (typeof view[key] === 'string') params[key] = view[key];
+      }
+      go(page, projectId, params);
+      navigated = true;
+    } else if (ownForm) {
+      go('jobs', null, { job: job.id });
+      navigated = true;
+    }
+  }
+  return navigated;
 }
 function activeProject() {
   return state.projects.some((p) => p.id === state.route.projectId)
@@ -190,10 +250,7 @@ function globalHead() {
     qa('[data-theme-choice]', d).forEach(
       (b) =>
         (b.onclick = () => {
-          document.documentElement.dataset.theme = b.dataset.themeChoice;
-          try {
-            localStorage.setItem('cine.appearance', b.dataset.themeChoice);
-          } catch {}
+          setTheme(b.dataset.themeChoice);
           d.close();
         }),
     );
@@ -362,13 +419,13 @@ function director(pid) {
       field(
         '作用项目',
         '<select id="agent-project">' +
-          opt('', '新建独立项目', pid || '') +
+          opt('', '整个工作室', pid || '') +
           state.projects.map((p) => opt(p.id, p.name, pid)).join('') +
           '</select>',
       ) +
       field(
         '委托方式',
-        '<select id="agent-mode"><option value="command">操作当前项目</option><option value="agent">从剧本制作成片</option></select>',
+        '<select id="agent-mode"><option value="command">自由指令</option><option value="agent">从剧本制作成片</option></select>',
       ) +
       field('新项目名称', '<input id="agent-name" maxlength="100" placeholder="由导演命名">') +
       field(
@@ -376,6 +433,10 @@ function director(pid) {
         '<textarea id="agent-brief" rows="5" required placeholder="例如，把第二章镜头移到开头并导出，或为当前项目独立生成一张图。"></textarea>',
       ) +
       field('章节数', '<input id="agent-count" type="number" min="1" max="12" value="2">') +
+      '<details id="agent-attachments"><summary>附上图片、视频或遮罩</summary>' +
+      field('图片或视频', '<input type="file" multiple id="agent-files" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm">') +
+      field('选区遮罩（PNG）', '<input type="file" multiple id="agent-masks" accept="image/png">') +
+      '<p class="hint">最多 6 个附件，合计 25 MiB。请在委托里说明文件的用途。</p></details>' +
       '<label class="include-selection" hidden><input id="agent-context" type="checkbox" checked> 使用当前工作区选中的素材与镜头</label><p id="agent-hint" class="hint"></p><div class="actions"><button class="btn primary">' +
       icon('spark', 16) +
       '开始制作</button></div></form>',
@@ -388,22 +449,18 @@ function director(pid) {
     use = q('#agent-context', d),
     hint = q('#agent-hint', d);
   const update = () => {
-    name.closest('label').hidden = !!sel.value;
-    mode.closest('label').hidden = !sel.value;
-    const k = sel.value ? mode.value : 'agent';
+    const k = mode.value;
+    name.closest('label').hidden = !!sel.value || k !== 'agent';
     count.closest('label').hidden = k !== 'agent';
+    q('#agent-attachments', d).hidden = k !== 'command';
     use.closest('label').hidden =
       k !== 'command' || pid !== sel.value || !(selection || state.route.shot);
     hint.textContent =
       k === 'command'
-        ? '导演会依据指令调用项目编辑、模型生成与交付操作。'
-        : '导演会按简报规划章节，依次制作剧本、插图、视频与成片。';
+        ? (sel.value ? '指令从所选项目开始执行。' : '可按名称指定或新建项目，也可以只查询工作室。')
+        : (sel.value ? '' : '将新建一个项目。') + '导演会按简报规划章节，依次制作剧本、插图、视频与成片。';
   };
-  mode.value = pid ? 'command' : 'agent';
-  sel.onchange = () => {
-    mode.value = sel.value ? 'command' : 'agent';
-    update();
-  };
+  sel.onchange = update;
   mode.onchange = update;
   update();
   q('form', d).onsubmit = (e) => {
@@ -411,7 +468,7 @@ function director(pid) {
     run(q('.primary', d), async () => {
       const projectId = sel.value,
         pr = brief.value.trim(),
-        kind = projectId ? mode.value : 'agent';
+        kind = mode.value;
       if (!pr) throw Error('请写下制作委托');
       const attachments =
         kind === 'command' && !use.closest('label').hidden && use.checked
@@ -420,6 +477,7 @@ function director(pid) {
               ...(selection ? await selection.inputs() : {}),
             }
           : {};
+      const files = kind === 'command' ? await directorFiles(d) : [];
       const job = await submit({
         kind,
         ...(projectId ? { projectId } : {}),
@@ -428,13 +486,31 @@ function director(pid) {
           : {}),
         prompt: pr,
         ...attachments,
-      });
+        ...(files.length ? { commandFiles: files } : {}),
+      }, q('#director', d));
       d.close();
       go('jobs', null, { job: job.id });
     });
   };
 }
-async function submit(body) {
+async function directorFiles(dialogEl) {
+  const files = [
+    ...Array.from(q('#agent-files', dialogEl).files, file => ({ file })),
+    ...Array.from(q('#agent-masks', dialogEl).files, file => ({ file, role: 'mask' })),
+  ];
+  if (files.length > 6 || files.reduce((sum, item) => sum + item.file.size, 0) > 25 * 1024 * 1024)
+    throw Error('最多可附上 6 个文件，合计不超过 25 MiB。');
+  for (const { file, role } of files) {
+    if (!file.size || (role ? file.type !== 'image/png' : !/^(image\/(png|jpeg|webp)|video\/(mp4|webm))$/.test(file.type)))
+      throw Error('附件「' + file.name + '」不符合所选格式。');
+  }
+  return Promise.all(files.map(async ({ file, role }) => ({
+    title: file.name,
+    ...(role ? { role } : {}),
+    dataUrl: await fileToData(file),
+  })));
+}
+async function submit(body, sourceForm) {
   // Retain the same request ID until an acknowledgement arrives. If the worker started
   // but the connection dropped, retrying the form retrieves the already-created job.
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(body)));
@@ -448,7 +524,28 @@ async function submit(body) {
   } catch {
     /* The service still receives a request ID when browser storage is unavailable. */
   }
-  const { job } = await request('/api/jobs', { ...body, idempotencyKey: requestId });
+  if (body.kind === 'command') {
+    receipts[requestId] ??= { pending, jobId: null };
+    storeReceipts();
+    submitting.add(requestId);
+    if (sourceForm) sourceForm.dataset.requestId = requestId;
+  }
+  let job;
+  try {
+    ({ job } = await request('/api/jobs', { ...body, idempotencyKey: requestId }));
+  } catch (error) {
+    if (body.kind === 'command' && error.status >= 400 && error.status < 500 && error.status !== 408) {
+      delete receipts[requestId];
+      storeReceipts();
+    }
+    throw error;
+  } finally {
+    submitting.delete(requestId);
+  }
+  if (body.kind === 'command') {
+    receipts[requestId].jobId = job.id;
+    storeReceipts();
+  }
   try {
     sessionStorage.removeItem(pending);
   } catch {
@@ -500,6 +597,8 @@ function stageText(event) {
     'video.saved': '视频已归档',
     'cut.saved': '时间线已保存',
     'command.applying': '导演正在执行操作',
+    'director.tool': '导演正在调用工具',
+    'director.receipt': '已收到工具结果',
     'media.running': '模型执行中',
     'worker.progress': '模型进度',
     'export.running': '正在合成影片',
@@ -511,7 +610,7 @@ function stageText(event) {
   const phases = { directing: '正在规划', accepted: '已采纳模型指令' };
   const stage = action[key] || (phases[parts[1]] ? phases[parts[1]] : key);
   const detail = [
-    event.title || event.name,
+    event.title || event.name || event.operation,
     event.chapters != null ? event.chapters + ' 章' : null,
     event.shots != null ? event.shots + ' 镜' : null,
     event.seconds != null ? Number(event.seconds).toFixed(1) + ' 秒' : null,
@@ -561,7 +660,8 @@ function jobs(el) {
     const events = (sel.events || []).slice(-35);
     const metric = sel.metrics || {};
     const error = sel.error?.message || sel.error;
-    const dest = sel.result?.deliveryUrl;
+    const dest = sel.result?.deliveryUrl || sel.result?.assetUrl;
+    const localDownload = typeof dest === 'string' && /^\/api\/projects\/[\w-]+\/media\/[\w-]+$/.test(dest);
     detail.innerHTML =
       '<div class="sectionhead"><h2>' +
       esc(kindLabel(sel.kind)) +
@@ -578,6 +678,11 @@ function jobs(el) {
           '</p>'
         : '') +
       (sel.result?.summary ? '<p class="agent-summary">' + esc(sel.result.summary) + '</p>' : '') +
+      (sel.result?.media?.width ? '<p class="hint">交付文件 · ' +
+        esc([sel.result.media.width + '×' + sel.result.media.height,
+          sel.result.media.duration ? sel.result.media.duration.toFixed(2) + ' 秒' : '',
+          sel.result.media.frames ? sel.result.media.frames + ' 帧' : ''].filter(Boolean).join(' · ')) +
+        '</p>' : '') +
       (events.length
         ? '<ol class="events">' +
           events
@@ -603,12 +708,12 @@ function jobs(el) {
         ? btn('查看产物', 'result', 'image', 'primary')
         : '') +
       (['failed', 'interrupted'].includes(sel.status) ? btn('从断点重试', 'retry', 'refresh') : '') +
-      (dest
+      (localDownload
         ? '<a class="btn primary" href="' +
           esc(dest) +
           '?download=1" download>' +
           icon('download', 16) +
-          '下载成片</a>'
+          (sel.result?.deliveryUrl ? '下载成片' : '下载素材') + '</a>'
         : '') +
       '</div>';
     listen(detail, 'retry', async () => {
@@ -680,6 +785,7 @@ async function load() {
     state.projects = list.projects || [];
     state.jobs = currentJobs;
     state.project = one.project;
+    if (applyDirectorViews(currentJobs)) return;
     if (route.projectId) saveJSON('cine.project', route.projectId);
     globalHead();
     el.innerHTML =
@@ -742,11 +848,14 @@ async function poll() {
   if (busyPoll || document.hidden) return;
   const wasRoute = state.route,
     active = state.jobs.some((j) => ['running', 'queued'].includes(j.status));
-  if (!active && wasRoute.page !== 'jobs') return;
+  if (!active && wasRoute.page !== 'jobs' && !Object.keys(receipts).length) return;
   busyPoll = true;
   try {
     const list = (await request('/api/jobs?summary=1')).jobs || [];
     if (wasRoute !== state.route) return;
+    const missing = Object.values(receipts).filter((r) => r.jobId && !list.some((j) => j.id === r.jobId));
+    const unseen = await Promise.all(missing.map(async (r) => (await request('/api/jobs/' + id(r.jobId))).job));
+    if (wasRoute !== state.route || applyDirectorViews([...list, ...unseen])) return;
     const changed = list.filter((j) =>
       state.jobs.some((old) => old.id === j.id && old.status !== j.status),
     );

@@ -126,7 +126,11 @@ export async function request(path, body, method) {
   try {
     data = await r.json();
   } catch {}
-  if (!r.ok) throw Error(data.error?.message || data.error || data.message || '服务响应 ' + r.status);
+  if (!r.ok) {
+    const error = Error(data.error?.message || data.error || data.message || '服务响应 ' + r.status);
+    error.status = r.status;
+    throw error;
+  }
   return data;
 }
 export function listen(el, op, fn) {
